@@ -21,61 +21,97 @@ class StudentService
 
     public function registerStudent(array $data): array
     {
+        // Start database transaction
         $this->db->transStart();
 
         try {
-            // STEP 1: Insert into `students`
-            // CI4's insert() method conveniently returns the inserted ID on success!
-            $studentId = $this->studentModel->insert([
-                'fname' => $data['fname'],
-                'lname' => $data['lname'],
-                'mname' => $data['mname'] ?? null,
-            ]);
-
-            if (!$studentId) {
-                // If it fails, grab the exact validation/model error
-                throw new Exception('Student Insert Error: ' . implode(', ', $this->studentModel->errors()));
+            // Step 1: Create the student record
+            $studentId = $this->createStudent($data);
+            
+            if ($studentId == null) {
+                $errors = $this->studentModel->errors();
+                $errorMessage = implode(', ', $errors);
+                throw new Exception('Failed to create student: ' . $errorMessage);
             }
 
-            // STEP 2: Insert into `rfids`
-            $rfidId = $this->rfidModel->insert([
-                'rfid' => $data['rfid']
-            ]);
-
-            if (!$rfidId) {
-                throw new Exception('RFID Insert Error: ' . implode(', ', $this->rfidModel->errors()));
+            // Step 2: Create the RFID record
+            $rfidId = $this->createRfid($data['rfid']);
+            
+            if ($rfidId == null) {
+                $errors = $this->rfidModel->errors();
+                $errorMessage = implode(', ', $errors);
+                throw new Exception('Failed to create RFID: ' . $errorMessage);
             }
 
-            // STEP 3: Link them in the `student_rfids` pivot table
-            // FIX: We use the Query Builder directly here to bypass CI4's primary key requirement for Models
-            $pivotInsert = $this->db->table('student_rfids')->insert([
-                'student_id' => $studentId,
-                'rfid_id'    => $rfidId
-            ]);
-
-            if (!$pivotInsert) {
-                throw new Exception('Pivot Table Error: ' . $this->db->error()['message']);
+            // Step 3: Link student and RFID together
+            $linkSuccess = $this->linkStudentToRfid($studentId, $rfidId);
+            
+            if ($linkSuccess == false) {
+                $error = $this->db->error();
+                throw new Exception('Failed to link student and RFID: ' . $error['message']);
             }
 
-            // Complete the Transaction
+            // Complete the transaction
             $this->db->transComplete();
 
-            if ($this->db->transStatus() === false) {
-                throw new Exception('Transaction Status Failed: ' . $this->db->error()['message']);
+            // Check if transaction was successful
+            $transactionSuccess = $this->db->transStatus();
+            if ($transactionSuccess == false) {
+                $error = $this->db->error();
+                throw new Exception('Transaction failed: ' . $error['message']);
             }
 
-            return [
+            // Return the created student data
+            $result = [
                 'id'    => $studentId,
                 'fname' => $data['fname'],
                 'lname' => $data['lname'],
-                'mname' => $data['mname'] ?? null,
+                'mname' => isset($data['mname']) ? $data['mname'] : null,
                 'rfid'  => $data['rfid']
             ];
 
+            return $result;
+
         } catch (Exception $e) {
-            // Rollback and pass the SPECIFIC error message up to the Controller
+            // Rollback transaction on error
             $this->db->transRollback();
             throw new Exception($e->getMessage());
         }
+    }
+
+    private function createStudent(array $data)
+    {
+        $studentData = [
+            'fname' => $data['fname'],
+            'lname' => $data['lname'],
+            'mname' => isset($data['mname']) ? $data['mname'] : null,
+        ];
+
+        $studentId = $this->studentModel->insert($studentData);
+        
+        return $studentId;
+    }
+
+    private function createRfid(string $rfidValue)
+    {
+        $rfidData = [
+            'rfid' => $rfidValue
+        ];
+
+        $rfidId = $this->rfidModel->insert($rfidData);
+        
+        return $rfidId;
+    }
+
+    private function linkStudentToRfid(int $studentId, int $rfidId)
+    {
+        $linkData = [
+            'student_id' => $studentId,
+            'rfid_id'    => $rfidId
+        ];
+
+        $success = $this->db->table('student_rfids')->insert($linkData);
+        
+        return $success;
     }
 }
